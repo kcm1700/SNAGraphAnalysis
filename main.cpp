@@ -157,6 +157,7 @@ void readUserInfo(Users &users)
       users.nameToId[name] = id;
       auto &user = users[id];
       user.name = name;
+      user.id = id;
 
       user.followers = parseIdList(scan);
 
@@ -483,6 +484,57 @@ void fillLanguages(Users &users, const Repositories &repos, const Languages &lan
   }
 }
 
+void restoreUserInput(Users &users)
+{
+  FILE *fp = fopen("user-input.txt", "w");
+  for (auto &kv : users)
+  {
+    fprintf(fp, "%d %s\n", (int)kv.second.id, kv.second.name.c_str());
+  }
+  fclose(fp);
+}
+
+void saveLanguageToUsers(Users &users, Languages &lang)
+{
+  map<id_t, vector<id_t>> langToUsers[3];
+  for (const auto &keyuser : users)
+  {
+    const auto &user = keyuser.second;
+    for (auto lang : user.languages)
+    {
+      for (int i = 0; i < 3; i++) {
+        langToUsers[i][lang].push_back(user.id);
+      }
+    }
+    for (auto lang : user.languages_forks)
+    {
+      for (int i = 1; i < 3; i++) {
+        langToUsers[i][lang].push_back(user.id);
+      }
+    }
+    for (auto lang : user.languages_subscribed)
+    {
+      for (int i = 2; i < 3; i++) {
+        langToUsers[i][lang].push_back(user.id);
+      }
+    }
+  }
+  string fnames[3] = {"lang-user_own.txt","lang-user_own+fork.txt","lang-user_own+fork+sub.txt"};
+  for (int i = 0; i < 3; i++) {
+    FILE *fp = fopen(fnames[i].c_str(), "w");
+    for (auto &kv : langToUsers[i])
+    {
+      fprintf(fp,"%lld <%s>", (long long)kv.first, lang.idToName[kv.first].c_str());
+      for (auto id : kv.second)
+      {
+        fprintf(fp," %lld", (long long)id);
+      }
+      fprintf(fp, "\n");
+    }
+    fclose(fp);
+  }
+}
+
 int main(int argc, char *argv)
 {
   Users users;
@@ -497,5 +549,6 @@ int main(int argc, char *argv)
 
   saveLanguageStatistics(languages);
   saveUserLanguageStatistics(users, languages);
+  saveLanguageToUsers(users, languages);
   return 0;
 }
