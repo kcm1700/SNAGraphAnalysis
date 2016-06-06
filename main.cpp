@@ -404,7 +404,7 @@ void saveLanguageStatistics(const Languages &languages)
   sort(rank.rbegin(), rank.rend());
 
   FILE *fp = fopen("langstat.txt", "w");
-  fprintf(fp, "# 언어별로 사용된 repository 개수.");
+  fprintf(fp, "# 언어별로 사용된 repository 개수.\n");
   for (auto kv : rank)
   {
     fprintf(fp, "%s %lld\n", kv.second.c_str(), (long long)kv.first);
