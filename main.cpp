@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <iterator>
 #include <limits>
 #include <cctype>
 #include <algorithm>
@@ -24,6 +25,8 @@ namespace FileNames
 {
   string follower = "follow_info/followers";
   string following = "follow_info/following";
+  string follower_new = "follow_info/20160606/followers.txt";
+  string following_new = "follow_info/20160606/following.txt";
   string forker = "repository_info/forks.txt";
   string language = "repository_info/language.txt";
   string subscriber = "repository_info/subscribers.txt";
@@ -54,6 +57,8 @@ struct User
   vector<id_t> languages; // 소유
   vector<id_t> languages_subscribed; // subscribers 관계
   vector<id_t> languages_forks; // fork 관계
+
+  vector<id_t> languages_all; // all combined
 };
 
 void vector_unique(vector<id_t> &vec) {
@@ -124,11 +129,11 @@ vector<id_t> parseIdList(istringstream &s)
   return res;
 }
 
-void readUserInfo(Users &users)
+void readUserInfo(Users &users, string followerFileName, string followingFileName)
 {
   {
-    fprintf(stderr, "opening %s\n", FileNames::follower.c_str());
-    ifstream follower(FileNames::follower);
+    fprintf(stderr, "opening %s\n", followerFileName.c_str());
+    ifstream follower(followerFileName);
     follower.sync_with_stdio(false);
     if (!follower.is_open())
     {
@@ -174,8 +179,8 @@ void readUserInfo(Users &users)
 
 
   {
-    fprintf(stderr, "opening %s\n", FileNames::following.c_str());
-    ifstream following(FileNames::following);
+    fprintf(stderr, "opening %s\n", followingFileName.c_str());
+    ifstream following(followingFileName);
     following.sync_with_stdio(false);
     if (!following.is_open())
     {
@@ -481,6 +486,8 @@ void fillLanguages(Users &users, const Repositories &repos, const Languages &lan
     user.languages = move(langset);
     vector_unique(user.languages_forks);
     vector_unique(user.languages_subscribed);
+
+    user.languages_all = vector_union(user.languages, vector_union(user.languages_forks, user.languages_subscribed));
   }
 }
 
@@ -535,12 +542,207 @@ void saveLanguageToUsers(Users &users, Languages &lang)
   }
 }
 
+void saveFollowFollowingDegree(const Users &users)
+{
+  FILE *fp = fopen("follow_degree_dist.txt", "w");
+  fprintf(fp, "degree following# follower#\n");
+  map<int, int> cntin, cntout;
+  for (const auto &kv : users)
+  {
+    cntin[kv.second.followings.size()]++;
+    cntout[kv.second.followers.size()]++;
+  }
+  for (int i = 0; i < 1000; i++) {
+    fprintf(fp, "%d %d %d\n", i, cntin[i], cntout[i]);
+  }
+  fclose(fp);
+}
+
+
+/* a <= b? */
+bool is_subset(const vector<id_t>& a, const vector<id_t> &b)
+{
+  size_t i = 0, j = 0;
+  while (i < a.size() && j < b.size())
+  {
+    if (a[i] == b[j])
+    {
+      i++;
+      j++;
+    }
+    else if (a[i] > b[j])
+    {
+      j++;
+    }
+    else
+    {
+      return false;
+    }
+  }
+  return i == a.size();
+}
+
+void saveFrequentLanguageSet(const Users &users, const Languages &langs)
+{
+  int support = 1000;
+  map<vector<id_t>, int> freqsets;
+
+  /* build initial set (size 1) */
+  for (auto kv : langs.idToName)
+    freqsets[vector<id_t>(1, kv.first)] = 0;
+  /* calc support */
+  for (const auto &kv : users)
+  {
+    const auto &user = kv.second;
+    auto langset = vector_union(vector_union(user.languages, user.languages_forks), user.languages_subscribed);
+    for (auto &fset : freqsets)
+      if (is_subset(fset.first, langset))
+        fset.second++;
+  }
+  /* filter */
+  for (auto I = freqsets.begin(), IEnd = freqsets.end(); I != IEnd;) {
+    if (I->second < support) I = freqsets.erase(I);
+    else ++I;
+  }
+
+  FILE *fp = fopen("freqset.txt", "w");
+  for (int sz = 1; !freqsets.empty() ; sz++)
+  {
+    fprintf(fp, "%d:", sz);
+    vector<pair<int, vector<id_t>>> sorted;
+    for (auto &fset : freqsets) sorted.emplace_back(fset.second, fset.first);
+    sort(sorted.rbegin(), sorted.rend());
+    for (auto &fset : sorted)
+    {
+      fprintf(fp, "{");
+      for (int i = 0; i < fset.second.size(); i++)
+      {
+        if (i != 0)
+          fprintf(fp, ", ");
+        fprintf(fp, "%s", langs.idToName.find(fset.second[i])->second.c_str());
+      }
+      fprintf(fp, "} -> %d, ", fset.first);
+    }
+    fprintf(fp, "\n");
+
+    /* generate new candidates */
+    map<vector<id_t>, int> candidates;
+    for (auto &s1 : freqsets)
+    {
+      for (auto &s2 : freqsets)
+      {
+        auto s = vector_union(s1.first, s2.first);
+        if (s.size() == sz + 1)
+        {
+          candidates[s] = 0;
+        }
+      }
+    }
+    swap(candidates, freqsets);
+
+    /* calc support */
+    for (const auto &kv : users)
+    {
+      const auto &user = kv.second;
+      auto langset = vector_union(vector_union(user.languages, user.languages_forks), user.languages_subscribed);
+      for (auto &fset : freqsets)
+        if (is_subset(fset.first, langset))
+          fset.second++;
+    }
+    /* filter */
+    for (auto I = freqsets.begin(), IEnd = freqsets.end(); I != IEnd;) {
+      if (I->second < support) I = freqsets.erase(I);
+      else ++I;
+    }
+  }
+  fclose(fp);
+}
+
+int countFoci(const User &user1, const User &user2)
+{
+  const auto &lang1 = user1.languages_all;
+  const auto &lang2 = user2.languages_all;
+
+  int res = 0;
+  int i = 0, j = 0;
+  while (i < lang1.size() && j < lang2.size())
+  {
+    if (lang1[i] == lang2[j]) {
+      res++;
+      i++;
+      j++;
+    }
+    else if (lang1[i] > lang2[j]) {
+      j++;
+    }
+    else {
+      i++;
+    }
+  }
+  return res;
+}
+
+void saveFocalClosure(const Users &users, const Users &usersNew, const Repositories &repos, const Languages &langs)
+{
+  fprintf(stderr, "focal closure calculation (using all language set(own+fork+sub))\n");
+  map<int, long long> possibleLinks;
+
+  int userCnt = 0;
+  for (auto I = users.begin(), IEnd = users.end(); I != IEnd; ++I)
+  {
+    userCnt++;
+    if (userCnt % 1000 == 0)
+      fprintf(stderr, "processing %lld / %lld...\n", (long long)userCnt, (long long)users.size());
+    for (auto J = I; J != IEnd; ++J)
+    {
+      possibleLinks[countFoci(I->second, J->second)]++;
+    }
+  }
+  map<int, int> countNewLink;
+  int allnew = 0;
+  for (auto &kv : users) {
+    id_t id = kv.first;
+    const User &user = kv.second;
+    const User &newUser = usersNew.find(id)->second;
+    auto oldNeighbor = vector_union(user.followings, user.followers);
+    auto newNeighbor = vector_union(newUser.followings, newUser.followers);
+    vector_unique(oldNeighbor);
+    vector_unique(newNeighbor);
+
+    vector<id_t> diff;
+    // now sorted ranges
+    set_difference(newNeighbor.begin(), newNeighbor.end(), oldNeighbor.begin(), oldNeighbor.end(),
+      inserter(diff, diff.begin()));
+
+    for (id_t new_id : diff) {
+      auto I = users.find(new_id);
+      if (I == users.end())
+        continue;
+      int foci = countFoci(user, I->second);
+      countNewLink[foci]++;
+      allnew++;
+    }
+  }
+  fprintf(stderr, "found %d new links\n", allnew);
+
+
+  FILE *fp = fopen("focal_closure.txt", "w");
+  fprintf(fp, "# [foci] [new link count] [all pairs] [probability]\n");
+  for (auto kv : countNewLink)
+  {
+    fprintf(fp, "%d %d %lld %.9f\n", kv.first, kv.second, (long long)possibleLinks[kv.first],
+      (double)kv.second / (double)possibleLinks[kv.first]);
+  }
+  fclose(fp);
+}
+
 int main(int argc, char *argv)
 {
-  Users users;
+  Users users, usersNew;
   Repositories repositories;
   Languages languages;
-  readUserInfo(users);
+  readUserInfo(users, FileNames::follower, FileNames::following);
+  readUserInfo(usersNew, FileNames::follower_new, FileNames::following_new);
   readRepositoryInfo(users, repositories, languages);
   printf("users: %d\n", (int)users.size());
   printf("repos: %d\n", (int)repositories.size());
@@ -550,5 +752,9 @@ int main(int argc, char *argv)
   saveLanguageStatistics(languages);
   saveUserLanguageStatistics(users, languages);
   saveLanguageToUsers(users, languages);
+  saveFollowFollowingDegree(users);
+  saveFrequentLanguageSet(users, languages);
+
+  saveFocalClosure(users, usersNew, repositories, languages);
   return 0;
 }
